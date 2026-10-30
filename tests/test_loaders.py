@@ -1,3 +1,4 @@
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,6 +44,60 @@ class LoaderTests(unittest.TestCase):
         second = LFW(self.images, data_count=10, seed=4)
         self.assertEqual(first.samples, second.samples)
         self.assertEqual(first[0][0], (4, 3))
+
+    def test_original_import_paths_remain_compatible(self):
+        from lfw_loader import DataLoader as OriginalDataLoader
+        from LFW_pytorch_loader import LFW as OriginalLFW
+
+        self.assertIs(OriginalDataLoader, DataLoader)
+        self.assertIs(OriginalLFW, LFW)
+        dataset = OriginalLFW(self.images, data_count=2, seed=1)
+        self.assertEqual(len(dataset), 2)
+        legacy = OriginalDataLoader(self.images, data_count=2, seed=1)
+        legacy.loadLFW_facedata()
+        self.assertEqual(len(legacy.images), 2)
+
+    def test_path_aliases_cannot_conflict_across_labels(self):
+        (self.images / "nested").mkdir()
+        for alias in ("./male0.png", "nested/../male0.png"):
+            with self.subTest(alias=alias):
+                (self.root / "female_names.txt").write_text(alias, encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "both"):
+                    select_samples(self.images, data_count=2, seed=1)
+
+    def test_path_aliases_do_not_inflate_available_samples(self):
+        (self.images / "nested").mkdir()
+        (self.root / "male_names.txt").write_text(
+            "male0.png\n./male0.png\nnested/../male0.png\nmale1.png\n", encoding="utf-8"
+        )
+        samples = select_samples(self.images, data_count=4, seed=1)
+        male_names = {name for name, label in samples if label == 0}
+        self.assertEqual(male_names, {"male0.png", "male1.png"})
+        with self.assertRaisesRegex(ValueError, "distinct"):
+            select_samples(self.images, data_count=6, seed=1)
+
+    def test_all_input_paths_are_checked_before_sampling(self):
+        (self.root / "outside.png").write_bytes(b"fixture")
+        (self.root / "male_names.txt").write_text("male0.png\n../outside.png", encoding="utf-8")
+        # Seed 1 selects male0.png; the other input must still be rejected.
+        with self.assertRaisesRegex(ValueError, "within"):
+            select_samples(self.images, data_count=2, seed=1)
+
+    @unittest.skipUnless(os.name == "nt", "Windows case-insensitive path comparison")
+    def test_windows_case_alias_cannot_conflict_across_labels(self):
+        (self.root / "female_names.txt").write_text("MALE0.PNG", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "both"):
+            select_samples(self.images, data_count=2, seed=1)
+
+    def test_symlink_alias_cannot_conflict_across_labels(self):
+        alias = self.images / "alias.png"
+        try:
+            alias.symlink_to(self.images / "male0.png")
+        except (OSError, NotImplementedError) as error:
+            self.skipTest(f"Symlink creation unavailable: {error}")
+        (self.root / "female_names.txt").write_text("alias.png", encoding="utf-8")
+        with self.assertRaisesRegex(ValueError, "both"):
+            select_samples(self.images, data_count=2, seed=1)
 
     def test_legacy_split_reload_and_instance_isolation(self):
         first = DataLoader(self.images, data_count=20, seed=1)
