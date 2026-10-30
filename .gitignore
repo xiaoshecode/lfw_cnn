@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+.venv/
+.idea/
+.pytest_cache/
+.ruff_cache/
+easy_trainingdata/
+male_names.txt
+female_names.txt
